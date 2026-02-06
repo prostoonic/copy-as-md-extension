@@ -57,5 +57,5 @@ Tampermonkey-скрипт для сайта **Preax**, который добав
 
 ## 👤 Авторы
 
-Andrei Fedorov (@ai36)
+Andrei Fedorov (@ai36)\
 Artem Stralenia (@procto_onic)
