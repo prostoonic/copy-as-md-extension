@@ -92,7 +92,7 @@
             fill: #c5c7cb;
             z-index: 20;
             cursor: pointer;
-        
+
             &:hover {
                 fill: #e5e7eb;
             }
@@ -158,16 +158,16 @@
             padding: 16px;
             border-radius: 4px;
             background: #181818;
-        
+
             display: flex;
             align-items: center;
             justify-content: center;
             color: #16a34a;
             gap: 5px;
             z-index: 20;
-        
+
             animation: cramd 3s forwards;
-        
+
             button {
                 cursor: pointer;
                 border: none;
@@ -177,7 +177,7 @@
                 height: 24px;
                 display: flex;
                 color: inherit;
-        
+
                 svg {
                     margin: auto;
                     width: 16px;
@@ -185,19 +185,19 @@
                     fill: currentColor;
                 }
             }
-        
+
             svg {
                 width: 24px;
                 height: 24px;
                 fill: currentColor;
             }
-        
+
             span {
                 font-weight: 600;
                 color: color-mix(in srgb, #16a34a 50%, white);
             }
         }
-        
+
         @keyframes cramd {
             from {
                 translate: 150% 0;
