@@ -44,8 +44,6 @@
     const componentFiber = findComponentFiber(fiber);
     if (!componentFiber) return null;
 
-    console.log(componentFiber);
-
     return {
       name: componentFiber.type.name || "Anonymous",
       props: componentFiber.memoizedProps,
