@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Copy-review-as-markdown
+// @name         Copy-review-as-markdown by ai36
 // @namespace    http://tampermonkey.net/
 // @version      2026-02-06
-// @description  The script adds a “Copy” button to elements on the page and allows you to quickly copy the required text (URL, value, or block content) to the clipboard with a single click.
+// @description  The script adds a “Copy to clipboard” button to elements on the code review page and allows you to quickly copy the required text (URL, value, or block content) to the clipboard with a single click.
 // @author       Andrei Fedorov, Artem Stralenia
 // @match        https://preax.ru/*
 // @grant        none
@@ -10,11 +10,44 @@
 
 (function () {
   "use strict";
-  const REVIEW_WRAPPER_SELECTOR =
-    "section[class^='FormatFeedback_answerSection']";
-  const IMAGE_WRAPPER_SELECTOR = "[class^='ImgBlock_imgWrapper']";
+  const REVIEW_LIST_SELECTOR = "[id^='feedback-']";
+  const ACCORDION_BUTTON_SELECTOR = "button[class^='Accordion_button']";
+  const PROJECT_TASK_STATUS = "[class^='ProjectTask_status']";
   const BTN_ATTR = "data-copy-md-btn";
 
+  const SECTION_HEADERS = ["Плюсы", "Баги", "Рекомендации"];
+  const SECTION_HEADERS_PREFIX = "###";
+  const SCORE_PREFIX = "##";
+  const ITERATION_PREFIX = "#";
+
+  const ICONS = {
+    COPY: `
+        <svg enable-background="new 0 0 24 24" focusable="false" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <g><rect fill="none" height="24" width="24"></rect></g>
+            <g><path d="M16,20H5V6H3v14c0,1.1,0.9,2,2,2h11V20z M20,16V4c0-1.1-0.9-2-2-2H9C7.9,2,7,2.9,7,4v12c0,1.1,0.9,2,2,2h9 C19.1,18,20,17.1,20,16z M18,16H9V4h9V16z"></path></g>
+        </svg>
+        `,
+    DONE: `
+        <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="50%" cy="50%" r="40%" fill="white"></circle>
+            <path d="M256 512c141.4 0 256-114.6 256-256S397.4 0 256 0S0 114.6 0 256S114.6 512 256 512zM369 209L241 337c-9.4 9.4-24.6 9.4-33.9 0l-64-64c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0l47 47L335 175c9.4-9.4 24.6-9.4 33.9 0s9.4 24.6 0 33.9z"></path>
+        </svg>
+        `,
+    CLOSE: `
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512">
+            <path d="M310.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L160 210.7 54.6 105.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L114.7 256 9.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L160 301.3 265.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L205.3 256 310.6 150.6z"></path>
+        </svg>
+        `,
+  };
+
+  const TEXTS = {
+    NOTICE: "Скопировано",
+    AVERAGE_SCORE: "Средняя оценка",
+  };
+
+  const NOTICE_TIMEOUT = 5000;
+
+  // React fiber
   function getReactFiber(dom) {
     for (const key in dom) {
       if (key.startsWith("__reactFiber$")) {
@@ -50,42 +83,82 @@
     };
   }
 
-  function getSectionName(index) {
-    switch (index) {
-      case 0:
-        return "# Плюсы";
-      case 1:
-        return "# Баги";
-      case 2:
-        return "# Рекомендации";
-      default:
-        return "# Оник облажался((";
-    }
+  // Iteration's header
+  function getIterationHeader(iteration) {
+    if (iteration === "0") return "task-done";
+
+    return `debugging-${iteration}-done`;
   }
 
+  // Average score of iteration
+  function getIterationScore(iteration) {
+    return getPropsFromComponent(document.querySelector(PROJECT_TASK_STATUS))
+      .props.feedback[iteration].required.averageRating;
+  }
+
+  // Headers of section in md
+  function getSectionName(index) {
+    return `${SECTION_HEADERS_PREFIX} ${SECTION_HEADERS[index] || ""}`;
+  }
+
+  // Adding attached images
   function getFiles(filesArray) {
     return filesArray.reduce((acc, cur) => acc + `![](${cur})\n`, "");
   }
 
-  function addButtonInReview(reviewElem) {
-    if (!reviewElem || reviewElem.querySelector(`button[${BTN_ATTR}]`)) return;
+  // Create a full feedback for one iteration
+  function createMdFeedback(feedbackArray) {
+    let mdText = "";
+    feedbackArray.map((i, index) => {
+      mdText =
+        i.files.length > 0
+          ? mdText +
+            `\n\n${getSectionName(Number(index))}\n\n` +
+            `${getFiles(i.files)}\n` +
+            i.answer +
+            "\n"
+          : mdText +
+            `\n\n${getSectionName(Number(index))}\n\n` +
+            i.answer +
+            "\n";
+    });
+    return `${mdText}`;
+  }
 
-    reviewElem.style.position = "relative";
+  // Adding DOM-elements
+  function scoreToStar(score) {
+    return "⭐⭐⭐⭐⭐".slice(0, score);
+  }
+
+  function addButtonInFeedbackList(feedbackItem) {
+    if (!feedbackItem || feedbackItem.querySelector(`button[${BTN_ATTR}]`))
+      return;
+
+    feedbackItem.style.position = "relative";
 
     const button = document.createElement("button");
     button.setAttribute(BTN_ATTR, "1");
+    button.setAttribute("type", "button");
 
     const style = document.createElement("style");
     style.innerHTML = `
         .cramd-button-review {
             position: absolute;
             right: 0px;
-            top: -8px;
-            width: 32px;
-            height: 32px;
-            background: transparent;
+            top: -.25rem;
+
+            width: fit-content;
+            height: auto;
+
+            color: rgb(161 161 170/var(--tw-text-opacity,1));
+            background-color: rgb(63 63 70/.5);
+            fill: currentColor;
+
             border: none;
-            padding: 0;
+            border-radius:.25rem;
+
+            padding: calc(.5rem - .125rem);
+
             display: flex;
             align-items: center;
             justify-content: center;
@@ -93,128 +166,207 @@
             z-index: 20;
             cursor: pointer;
 
+            transition-property: background-color,border-color,box-shadow,color;
+            transition-duration: .2s;
+
+            @media (width < 768px) {
+                padding: calc(.5rem - .125rem);
+            }
+
             &:hover {
-                fill: #e5e7eb;
+                background-color: rgb(250 250 250/var(--tw-bg-opacity,1));
+                color: rgb(24 24 27/var(--tw-text-opacity,1));
+            }
+
+            svg {
+                width: 1.25rem;
+                height: 1.25rem;
+                fill: currentColor;
+
+                @media (width < 768px) {
+                    height: 1rem;
+                    width: 1rem;
+                }
             }
         }
         `;
 
     button.classList.add("cramd-button-review");
 
-    button.innerHTML = `
-        <svg enable-background="new 0 0 24 24" focusable="false" height="24" viewBox="0 0 24 24" width="24">
-            <g><rect fill="none" height="24" width="24"></rect></g>
-            <g><path d="M16,20H5V6H3v14c0,1.1,0.9,2,2,2h11V20z M20,16V4c0-1.1-0.9-2-2-2H9C7.9,2,7,2.9,7,4v12c0,1.1,0.9,2,2,2h9 C19.1,18,20,17.1,20,16z M18,16H9V4h9V16z"></path></g>
-        </svg>
-    `;
+    button.innerHTML = ICONS.COPY;
 
     button.addEventListener("click", (e) => {
-      let mdText;
+      const iteration = Number(feedbackItem.id.match(/\d+$/)[0]) - 1;
+      const iterationScore = getIterationScore(iteration);
 
-      const feedbackArray =
-        getPropsFromComponent(reviewElem).props.feedbackArray;
-      feedbackArray.map((i, index) => {
-        mdText =
-          i.files.length > 0
-            ? mdText +
-              `\n${getSectionName(Number(index))}\n` +
-              `\n${getFiles(i.files)}\n` +
-              i.answer
-            : mdText + `\n${getSectionName(Number(index))}\n` + i.answer;
+      let fullFeedback = `${ITERATION_PREFIX} ${getIterationHeader(iteration)} (${TEXTS.AVERAGE_SCORE}: ${iterationScore})\n\n`;
+
+      const componentsList = feedbackItem.querySelectorAll(
+        ACCORDION_BUTTON_SELECTOR,
+      );
+
+      componentsList.forEach((c) => {
+        const props = getPropsFromComponent(c).props;
+        const feedbackArray = props.accordionContent.props.feedbackArray;
+        const feedbackHeading = `${SCORE_PREFIX} ${props.title} (${props.heading}) ${scoreToStar(props.chipContent)}`;
+        const mdFeedback = createMdFeedback(feedbackArray);
+        fullFeedback =
+          fullFeedback +
+          feedbackHeading +
+          mdFeedback +
+          "\n\n\n\n\n\n\n\n\n\n<br><br>\n\n";
       });
-
-      navigator.clipboard.writeText(`${mdText}`);
+      navigator.clipboard.writeText(`${fullFeedback}`);
       addMessage();
     });
 
-    reviewElem.appendChild(button);
-    reviewElem.appendChild(style);
+    feedbackItem.appendChild(button);
+    feedbackItem.appendChild(style);
   }
 
   function addMessage() {
     const messageBox = document.createElement("div");
     messageBox.classList.add("crimd-notice");
     messageBox.innerHTML = `
-        <svg clip-rule="evenodd" fill-rule="evenodd" stroke-linejoin="round" stroke-miterlimit="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m11.998 2.005c5.517 0 9.997 4.48 9.997 9.997 0 5.518-4.48 9.998-9.997 9.998-5.518 0-9.998-4.48-9.998-9.998 0-5.517 4.48-9.997 9.998-9.997zm-5.049 10.386 3.851 3.43c.142.128.321.19.499.19.202 0 .405-.081.552-.242l5.953-6.509c.131-.143.196-.323.196-.502 0-.41-.331-.747-.748-.747-.204 0-.405.082-.554.243l-5.453 5.962-3.298-2.938c-.144-.127-.321-.19-.499-.19-.415 0-.748.335-.748.746 0 .205.084.409.249.557z" fill-rule="nonzero"/></svg>
-        <span>Скопировано</span>
-        <button type="button">
-            <svg clip-rule="evenodd" fill-rule="evenodd" stroke-linejoin="round" stroke-miterlimit="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <path d="m12 10.93 5.719-5.72c.146-.146.339-.219.531-.219.404 0 .75.324.75.749 0 .193-.073.385-.219.532l-5.72 5.719 5.719 5.719c.147.147.22.339.22.531 0 .427-.349.75-.75.75-.192 0-.385-.073-.531-.219l-5.719-5.719-5.719 5.719c-.146.146-.339.219-.531.219-.401 0-.75-.323-.75-.75 0-.192.073-.384.22-.531l5.719-5.719-5.72-5.719c-.146-.147-.219-.339-.219-.532 0-.425.346-.749.75-.749.192 0 .385.073.531.219z" />
-            </svg>
-        </button>
+        <div>${ICONS.DONE}</div>
+        <span>${TEXTS.NOTICE}</span>
+        <button type="button">${ICONS.CLOSE}</button>
     `;
 
     const style = document.createElement("style");
     style.innerHTML = `
         .crimd-notice {
-            font-size: 16px;
-            line-height:24px;
-            box-sizing: border-box;
+            user-select: none;
+
+            font-size: 1.25rem;
+            line-height: 1.75rem;
+
             position: fixed;
-            right: 52px;
-            bottom: 52px;
-            background: transparent;
-            border: 2px solid;
-            padding: 16px;
-            border-radius: 4px;
-            background: #181818;
+            right: 2rem;
+            bottom: 2rem;
 
-            display: flex;
+            box-sizing: border-box;
+            border: 2px solid rgb(147 51 234/var(--tw-border-opacity,1));
+            border-radius: .25rem;
+
+            width: fit-content;
+            height: auto;
+
+            background-color: rgb(24 24 27/var(--tw-bg-opacity,1));
+
+            display: grid;
+            grid-template-columns: auto minmax(0,1fr) auto;
             align-items: center;
-            justify-content: center;
-            color: #16a34a;
-            gap: 5px;
-            z-index: 20;
 
-            animation: cramd 3s forwards;
+            z-index: 70;
+
+            animation: cramd ${NOTICE_TIMEOUT}ms forwards;
+
+            @media (width < 1024px) {
+                right: 1.5rem;
+                bottom: 1.5rem;
+            }
+
+            @media (width < 768px) {
+                right: 1rem;
+                bottom: 1rem;
+            }
+
+            div {
+                padding: 1rem;
+                display: grid;
+                align-items: center;
+
+                @media (width < 1024px) {
+                    padding: .75rem;
+                }
+
+                @media (width < 768px) {
+                    padding: .5rem;
+                }
+
+                svg {
+                    display: block;
+                    fill: #9333ea;
+                    height: 1.25rem;
+                    width: 1.25rem;
+
+                    @media (width < 768px) {
+                        height: 1rem;
+                        width: 1rem;
+                    }
+                }
+            }
+
+            span {
+                font-family: Montserrat;
+                font-weight: 500;
+                font-size: .875rem;
+                line-height: 1.25rem;
+                color: rgb(216 180 254/var(--tw-text-opacity,1));
+
+                @media (width < 768px) {
+                    font-size: .75rem;
+                    line-height: 1rem;
+                }
+            }
 
             button {
                 cursor: pointer;
                 border: none;
-                padding: 0;
-                background: unset;
-                width: 24px;
-                height: 24px;
+                border-radius: .25rem;
+
+                padding: 1rem;
+
+                background-color: transparent;
+
                 display: flex;
                 color: inherit;
+                font: inherit;
+
+                @media (width < 1024px) {
+                    padding: .75rem;
+                }
+
+                @media (width < 768px) {
+                    padding: .5rem;
+                }
 
                 svg {
-                    margin: auto;
-                    width: 16px;
-                    height: 16px;
-                    fill: currentColor;
+                    display: block;
+                    width: 1rem;
+                    height: 1rem;
+                    fill: #9333ea;
+
+                    @media (width < 768px) {
+                        height: .75rem;
+                        width: .75rem;
+                    }
                 }
             }
 
-            svg {
-                width: 24px;
-                height: 24px;
-                fill: currentColor;
-            }
 
-            span {
-                font-weight: 600;
-                color: color-mix(in srgb, #16a34a 50%, white);
-            }
         }
 
         @keyframes cramd {
             from {
-                translate: 150% 0;
+                translate: 0 100%;
+                opacity: 0;
             }
-            10% {
+            4% {
                 translate: 0 0;
                 opacity: 1;
             }
-            90% {
+            96% {
                 translate: 0 0;
                 opacity: 1;
             }
             to {
-                translate: 0 -100%;
+                translate: calc(100% + 2rem) 0;
                 opacity: 0;
             }
         }
+
     `;
 
     document.body.appendChild(messageBox);
@@ -224,7 +376,7 @@
       setTimeout(() => {
         deleteMessage(messageBox);
         deleteMessage(style);
-      }, 3000);
+      }, NOTICE_TIMEOUT);
     }
     timer();
 
@@ -245,10 +397,14 @@
     node.remove();
   }
 
-  addButtonInReview(document.querySelector(REVIEW_WRAPPER_SELECTOR));
+  document
+    .querySelectorAll(REVIEW_LIST_SELECTOR)
+    .forEach(addButtonInFeedbackList);
 
   const obs = new MutationObserver(() => {
-    addButtonInReview(document.querySelector(REVIEW_WRAPPER_SELECTOR));
+    document
+      .querySelectorAll(REVIEW_LIST_SELECTOR)
+      .forEach(addButtonInFeedbackList);
   });
 
   obs.observe(document.documentElement, { childList: true, subtree: true });
